@@ -11,10 +11,19 @@ services:
       - postgres
       - redis
     env_file: .env
+    environment:
+      # Increase Node.js heap size to 4GB for PDF + AI operations
+      - NODE_OPTIONS=--max-old-space-size=4096
     volumes:
       - ./cache:/usr/src/app/cache
     networks:
       - activepieces
+    deploy:
+      resources:
+        limits:
+          memory: 6G
+        reservations:
+          memory: 2G
   postgres:
     image: 'postgres:14.4'
     container_name: postgres
