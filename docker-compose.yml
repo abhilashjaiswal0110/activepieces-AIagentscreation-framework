@@ -48,6 +48,10 @@ services:
       # Sandbox Memory Limit (1GB per execution)
       - AP_SANDBOX_MEMORY_LIMIT=1048576
       
+      # HTTP Request Optimizations for API Connections
+      - AP_HTTP_TIMEOUT_MS=15000
+      - AP_COMPRESSION_ENABLED=true
+      
     volumes:
       - ./cache:/usr/src/app/cache
       - /tmp
