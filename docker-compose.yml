@@ -3,31 +3,88 @@ services:
     image: ghcr.io/activepieces/activepieces:0.76.1
     container_name: activepieces
     restart: unless-stopped
-    ## Enable the following line if you already use AP_EXECUTION_MODE with SANDBOX_PROCESS or old activepieces, checking the breaking change documentation for more info.
-    ## privileged: true
     ports:
       - '8080:80'
     depends_on:
-      - postgres
-      - redis
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_started
     env_file: .env
     environment:
-      # Increase Node.js heap size to 4GB for PDF + AI operations
+      # Performance: Use SANDBOX_CODE_ONLY for best performance with security
+      - AP_EXECUTION_MODE=SANDBOX_CODE_ONLY
+      
+      # Memory optimization for Node.js
       - NODE_OPTIONS=--max-old-space-size=4096
+      
+      # Worker Concurrency - adjust based on your workload
+      - AP_WORKER_CONCURRENCY=10
+      - AP_AGENTS_WORKER_CONCURRENCY=5
+      
+      # PostgreSQL Connection Pool
+      - AP_POSTGRES_POOL_SIZE=20
+      - AP_POSTGRES_IDLE_TIMEOUT_MS=10000
+      
+      # Timeout Optimizations for AI Operations
+      # Flow: 10 min for multi-step AI flows with Perplexity, OpenAI, Claude, DALL-E
+      # Trigger: 5 min for trigger testing/polling operations
+      - AP_FLOW_TIMEOUT_SECONDS=600
+      - AP_TRIGGER_TIMEOUT_SECONDS=300
+      - AP_ENGINE_OPERATION_TIMEOUT_SECONDS=600
+      - AP_WEBHOOK_TIMEOUT_SECONDS=30
+      - AP_TRIGGER_DEFAULT_POLL_INTERVAL=5
+      
+      # Redis Queue Optimization
+      - AP_REDIS_FAILED_JOB_RETENTION_DAYS=7
+      - AP_REDIS_FAILED_JOB_RETENTION_MAX_COUNT=500
+      
+      # Data Retention (must be >= PAUSED_FLOW_TIMEOUT_DAYS)
+      - AP_EXECUTION_DATA_RETENTION_DAYS=30
+      
+      # Rate Limiting
+      - AP_MAX_CONCURRENT_JOBS_PER_PROJECT=50
+      
+      # Sandbox Memory Limit (1GB per execution)
+      - AP_SANDBOX_MEMORY_LIMIT=1048576
+      
     volumes:
       - ./cache:/usr/src/app/cache
+      - /tmp
     networks:
       - activepieces
     deploy:
       resources:
         limits:
           memory: 6G
+          cpus: '4'
         reservations:
           memory: 2G
+          cpus: '2'
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:80/api/v1/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+      
   postgres:
     image: 'postgres:14.4'
     container_name: postgres
     restart: unless-stopped
+    command: >
+      postgres
+      -c shared_buffers=512MB
+      -c effective_cache_size=2GB
+      -c max_connections=100
+      -c work_mem=16MB
+      -c maintenance_work_mem=128MB
+      -c random_page_cost=1.1
+      -c effective_io_concurrency=200
+      -c wal_buffers=16MB
+      -c min_wal_size=1GB
+      -c max_wal_size=4GB
+      -c checkpoint_completion_target=0.9
     env_file: .env
     environment:
       - 'POSTGRES_DB=${AP_POSTGRES_DATABASE}'
@@ -37,16 +94,58 @@ services:
       - postgres_data:/var/lib/postgresql/data
     networks:
       - activepieces
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+          cpus: '2'
+        reservations:
+          memory: 1G
+          cpus: '1'
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${AP_POSTGRES_USERNAME}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      
   redis:
-    image: 'redis:7.0.7'
+    image: 'redis:7.0.7-alpine'
     container_name: redis
     restart: unless-stopped
+    command: >
+      redis-server
+      --maxmemory 2gb
+      --maxmemory-policy noeviction
+      --save 60 1000
+      --appendonly yes
+      --appendfsync everysec
+      --tcp-backlog 511
+      --timeout 300
+      --tcp-keepalive 60
     volumes:
       - 'redis_data:/data'
     networks:
       - activepieces
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+          cpus: '1'
+        reservations:
+          memory: 512M
+          cpus: '0.5'
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+      
 volumes:
   postgres_data:
+    driver: local
   redis_data:
+    driver: local
+    
 networks:
   activepieces:
+    driver: bridge
